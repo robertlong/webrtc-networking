@@ -14,14 +14,20 @@ function sendErrorMessage(ws, error) {
   }
 }
 
+let nextId = 0;
+const connections = new Map();
+
 async function onConnect(ws, request) {
   try {
+    const id = nextId++;
     fastify.log.info("Client connected.");
 
     const peerConnection = new RTCPeerConnection();
 
     // Create unreliable DataChannel (UDP-like)
     const dataChannel = peerConnection.createDataChannel("peerConnection", { ordered: false, maxRetransmits: 0 });
+
+    connections.set(id, { peerConnection, dataChannel, ws });
 
     // Send icecandidates as they are discovered
     peerConnection.addEventListener("icecandidate", event => {
@@ -40,7 +46,18 @@ async function onConnect(ws, request) {
 
     dataChannel.addEventListener("message", (event) => {
       fastify.log.info(`Received DataChannel message: "${event.data}"`);
-      dataChannel.send(event.data);
+      
+      for (const [peerId, connection] of connections) {
+        if (peerId === id) {
+          continue;
+        }
+
+        const peerChannel = connection.dataChannel;
+
+        if (peerChannel.readyState === "open") {
+          peerChannel.send(event.data);
+        }
+      }
     });
 
     const pendingIceCandidates = [];
@@ -112,6 +129,7 @@ async function onConnect(ws, request) {
     ws.on("close", () => {
       fastify.log.info("Client disconnected.");
       peerConnection.close();
+      connections.delete(id);
     });
 
     peerConnection.addEventListener("negotiationneeded", async () => {

@@ -5,13 +5,16 @@ export default function connect() {
 
   const peerConnection = new RTCPeerConnection();
 
-  peerConnection.addEventListener("datachannel", event => {
-    const dataChannel = event.channel;
+  let onMessageCallback;
+  let dataChannel = 
 
-    dataChannel.send("Hello World!");
+  peerConnection.addEventListener("datachannel", event => {
+    dataChannel = event.channel;
 
     dataChannel.addEventListener("message", event => {
-      console.log(`Received DataChannel message: ${event.data}`);
+      if (onMessageCallback) {
+        onMessageCallback(event.data);
+      }
     });
   });
 
@@ -86,6 +89,14 @@ export default function connect() {
   });
 
   return {
+    sendMessage: (message) => {
+      if (dataChannel && dataChannel.readyState === "open") {
+        dataChannel.send(message);
+      }
+    },
+    onMessage: (callback) => {
+      onMessageCallback = callback;
+    },
     addTrack: (track, ...streams) => {
       return peerConnection.addTrack(track, ...streams);
     },
