@@ -1,7 +1,8 @@
 import Fastify from "fastify"
 import FastifyNextJSPlugin from "fastify-nextjs";
 import FastifyWSPlugin from "fastify-ws";
-import { RTCPeerConnection } from "wrtc";
+import { RTCPeerConnection, nonstandard } from "wrtc";
+const { RTCVideoSource, RTCVideoSink } = nonstandard;
 
 const fastify = Fastify({ logger: true })
   .register(FastifyNextJSPlugin)
@@ -38,6 +39,32 @@ async function onConnect(ws, request) {
 
     peerConnection.addEventListener("track", (event) => {
       console.log("track added", event.track);
+
+      for (const [peerId, connection] of connections) {
+        if (peerId === id) {
+          continue;
+        }
+
+        const videoSource = new RTCVideoSource();
+        const videoTrack = videoSource.createTrack();
+        connection.peerConnection.addTrack(videoTrack);
+        connection.videoSource = videoSource;
+        connection.videoTrack = videoTrack;
+      }
+      
+      const videoSink = new RTCVideoSink(event.track);
+
+      videoSink.addEventListener("frame", ({ frame }) => {
+        for (const [peerId, connection] of connections) {
+          if (peerId === id) {
+            continue;
+          }
+
+          if (connection.videoSource) {
+            connection.videoSource.onFrame(frame);
+          }
+        }
+      });
     });
 
     dataChannel.addEventListener("open", () => {
@@ -129,6 +156,17 @@ async function onConnect(ws, request) {
     ws.on("close", () => {
       fastify.log.info("Client disconnected.");
       peerConnection.close();
+
+      const connection = connections.get(id);
+
+      if (connection.videoSink) {
+        connection.videoSink.stop();
+      }
+
+      if (connection.videoTrack) {
+        connection.videoTrack.stop();
+      }
+
       connections.delete(id);
     });
 

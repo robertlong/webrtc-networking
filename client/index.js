@@ -6,7 +6,8 @@ export default function connect() {
   const peerConnection = new RTCPeerConnection();
 
   let onMessageCallback;
-  let dataChannel = 
+  let dataChannel;
+  let onVideoStreamCallback;
 
   peerConnection.addEventListener("datachannel", event => {
     dataChannel = event.channel;
@@ -19,7 +20,7 @@ export default function connect() {
   });
 
   peerConnection.addEventListener("track", (event) => {
-    console.log("track added", event.track);
+    onVideoStreamCallback(new MediaStream([event.track]));
   });
 
   peerConnection.addEventListener("icecandidate", event => {
@@ -102,6 +103,9 @@ export default function connect() {
     },
     removeTrack: (trackRtpSender) => {
       peerConnection.removeTrack(trackRtpSender);
+    },
+    onVideoStream: (callback) => {
+      onVideoStreamCallback = callback;
     },
     close: () => {
       ws.close();

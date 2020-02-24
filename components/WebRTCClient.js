@@ -5,6 +5,7 @@ export default function WebRTCClient() {
   const client = useRef();
   const videoRef = useRef();
   const inputRef = useRef();
+  const videoStreamContainerRef = useRef();
   const [track, setTrack] = useState(null);
   const [messages, setMessages] = useState([]);
 
@@ -15,10 +16,19 @@ export default function WebRTCClient() {
       setMessages((messages) => [message, ...messages]);
     });
 
+    client.current.onVideoStream((stream) => {
+      const videoEl = document.createElement("video");
+      videoEl.width = 320;
+      videoEl.height = 240;
+      videoEl.autoplay = true;
+      videoEl.srcObject = stream;
+      videoStreamContainerRef.current.appendChild(videoEl);
+    });
+
     return () => {
       client.current.close();
     };
-  }, [setMessages]);
+  }, [setMessages, videoStreamContainerRef]);
 
   const onToggleVideo = useCallback(async () => {
     if (track) {
@@ -41,6 +51,7 @@ export default function WebRTCClient() {
     <div>
       <video autoPlay width={320} height={240} ref={videoRef} />
       <button onClick={onToggleVideo}>Toggle Video</button>
+      <div ref={videoStreamContainerRef} />
       <div>
         {messages.map((msg, i) => (<p key={i}>{msg}</p>))}
       </div>
