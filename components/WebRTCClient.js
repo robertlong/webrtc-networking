@@ -1,17 +1,10 @@
-import { useRef, useEffect } from "react";
-import Client from "../client";
+import { useEffect } from "react";
+import connect from "../client";
 
 export default function WebRTCClient() {
-  const client = useRef();
-
   useEffect(() => {
-    client.current = new Client();
-
-    client.current.connect();
-
-    return () => {
-      client.current.disconnect();
-    };
+    connect();
+    return () => {};
   });
 
   return "WebRTCClient";

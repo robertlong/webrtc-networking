@@ -8,79 +8,69 @@ const fastify = Fastify({ logger: true })
   .register(FastifyWSPlugin)
   .after(setupRoutes);
 
-
-const dataChannelOptions = {
-  ordered: false,
-  maxRetransmits: 0
-};
-
-function sendIceCandidateMessage(ws, candidate) {
-  if (ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: "icecandidate", candidate }));
-  }
-}
-
-function sendServerSessionDescriptionMessage(ws, serverSessionDescription) {
-  if (ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: "serverSessionDescription", serverSessionDescription }));
-  }
-}
-
 function sendErrorMessage(ws, error) {
   if (ws.readyState === 1) {
     ws.send(JSON.stringify({ type: "error", message: error.message }));
   }
 }
 
-async function handleIceCandidate(ws, peerConnection, candidate) {
+async function onConnect(ws, request) {
   try {
-    // Not sure why wrtc doesn't handle this like the browser.
-    if (!candidate.candidate) {
-      return;
-    }
-
-    await peerConnection.addIceCandidate(candidate)
-  } catch (error) {
-    fastify.log.error(error);
-    sendErrorMessage(ws, error);
-  }
-}
-
-async function handleClientSessionDescription(ws, peerConnection, clientSessionDescription) {
-  try {
-    await peerConnection.setRemoteDescription(clientSessionDescription);
-    const serverSessionDescription = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(serverSessionDescription);
-    sendServerSessionDescriptionMessage(ws, serverSessionDescription);
-  } catch (error) {
-    fastify.log.error(error);
-    sendErrorMessage(ws, error);
-  }
-}
-
-function setupRoutes() {
-  fastify.next("/");
-
-  fastify.ws.on("connection", (ws, _request) => {
     fastify.log.info("Client connected.");
 
     const peerConnection = new RTCPeerConnection();
 
+    // Create unreliable DataChannel (UDP-like)
+    const dataChannel = peerConnection.createDataChannel("peerConnection", { ordered: false, maxRetransmits: 0 });
+
     // Send icecandidates as they are discovered
     peerConnection.addEventListener("icecandidate", event => {
       if (event.candidate) {
-        sendIceCandidateMessage(ws, event.candidate);
+        ws.send(JSON.stringify({ type: "icecandidate", candidate: event.candidate }));
       }
     });
 
-    peerConnection.addEventListener("datachannel", (event) => {
-      const dataChannel = event.channel;
-
-      dataChannel.addEventListener("message", (event) => {
-        fastify.log.info(`Received DataChannel message: "${event.data}"`);
-        dataChannel.send(event.data);
-      });
+    dataChannel.addEventListener("open", () => {
+      fastify.log.info("DataChannel open.");
     });
+
+    dataChannel.addEventListener("message", (event) => {
+      fastify.log.info(`Received DataChannel message: "${event.data}"`);
+      dataChannel.send(event.data);
+    });
+
+    const pendingIceCandidates = [];
+
+    async function handleIceCandidate(candidate) {
+      try {
+        // Not sure why wrtc doesn't handle this like the browser.
+        if (!candidate.candidate) {
+          return;
+        }
+
+        if (!peerConnection.remoteDescription) {
+          pendingIceCandidates.push(pendingIceCandidates);
+        } else {
+          await peerConnection.addIceCandidate(candidate)
+        }
+      } catch (error) {
+        fastify.log.error(error);
+        sendErrorMessage(ws, error);
+      }
+    }
+
+    async function handleClientSessionDescription(clientSessionDescription) {
+      try {
+        await peerConnection.setRemoteDescription(clientSessionDescription);
+
+        for (const pendingIceCandidate of pendingIceCandidates) {
+          await peerConnection.addIceCandidate(pendingIceCandidate);
+        }
+      } catch (error) {
+        fastify.log.error(error);
+        sendErrorMessage(ws, error);
+      }
+    }
 
     ws.on("message", data => {
       try {
@@ -88,10 +78,10 @@ function setupRoutes() {
 
         switch (message.type) {
           case "icecandidate":
-            handleIceCandidate(ws, peerConnection, message.candidate);
+            handleIceCandidate(message.candidate);
             break;
           case "clientSessionDescription":
-            handleClientSessionDescription(ws, peerConnection, message.clientSessionDescription);
+            handleClientSessionDescription(message.clientSessionDescription);
             break;
           default:
             fastify.log.info(`Received message with unknown type: "${message.type}"`);
@@ -106,7 +96,20 @@ function setupRoutes() {
       fastify.log.info("Client disconnected.");
       peerConnection.close();
     });
-  });
+
+    const serverSessionDescription = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(serverSessionDescription);
+    ws.send(JSON.stringify({ type: "serverSessionDescription", serverSessionDescription }));
+
+  } catch (error) {
+    fastify.log.error(error);
+    ws.close();
+  }
+}
+
+function setupRoutes() {
+  fastify.next("/");
+  fastify.ws.on("connection", onConnect);
 }
 
 const start = async () => {
