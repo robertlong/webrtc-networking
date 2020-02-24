@@ -30,6 +30,10 @@ async function onConnect(ws, request) {
       }
     });
 
+    peerConnection.addEventListener("track", (event) => {
+      console.log("track added", event.track);
+    });
+
     dataChannel.addEventListener("open", () => {
       fastify.log.info("DataChannel open.");
     });
@@ -61,7 +65,20 @@ async function onConnect(ws, request) {
 
     async function handleClientSessionDescription(clientSessionDescription) {
       try {
-        await peerConnection.setRemoteDescription(clientSessionDescription);
+        if (clientSessionDescription.type === "offer" && peerConnection.signalingState !== "stable") {
+          await Promise.all([
+            peerConnection.setLocalDescription({ type: "rollback" }),
+            peerConnection.setRemoteDescription(clientSessionDescription)
+          ]);
+        } else {
+          await peerConnection.setRemoteDescription(clientSessionDescription);
+        }
+  
+        if (clientSessionDescription.type == "offer") {
+          const serverSessionDescription = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(serverSessionDescription);
+          ws.send(JSON.stringify({ type: "serverSessionDescription", serverSessionDescription }));
+        }
 
         for (const pendingIceCandidate of pendingIceCandidates) {
           await peerConnection.addIceCandidate(pendingIceCandidate);
@@ -97,13 +114,28 @@ async function onConnect(ws, request) {
       peerConnection.close();
     });
 
-    const serverSessionDescription = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(serverSessionDescription);
-    ws.send(JSON.stringify({ type: "serverSessionDescription", serverSessionDescription }));
+    peerConnection.addEventListener("negotiationneeded", async () => {
+      try {
+        const serverSessionDescription = await peerConnection.createOffer();
+
+        if (peerConnection.signalingState !== "stable") {
+          return;
+        }
+
+        await peerConnection.setLocalDescription(serverSessionDescription);
+        ws.send(JSON.stringify({ type: "serverSessionDescription", serverSessionDescription }));
+      } catch (error) {
+        fastify.log.error(error);
+        sendErrorMessage(ws, error);
+      }
+    });
 
   } catch (error) {
     fastify.log.error(error);
-    ws.close();
+
+    if (ws) {
+      ws.close();
+    }
   }
 }
 

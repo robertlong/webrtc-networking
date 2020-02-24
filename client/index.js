@@ -15,9 +15,23 @@ export default function connect() {
     });
   });
 
+  peerConnection.addEventListener("track", (event) => {
+    console.log("track added", event.track);
+  });
+
   peerConnection.addEventListener("icecandidate", event => {
     if (event.candidate) {
       ws.send(JSON.stringify({ type: "icecandidate", candidate: event.candidate }));
+    }
+  });
+
+  peerConnection.addEventListener("negotiationneeded", async event => {
+    try {
+      const clientSessionDescription = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(clientSessionDescription);
+      ws.send(JSON.stringify({ type: "clientSessionDescription", clientSessionDescription }));
+    } catch (error) {
+      console.error(`Error renegotiating connection: ${error}`);
     }
   });
 
@@ -31,10 +45,20 @@ export default function connect() {
 
   async function handleServerSessionDescription(serverSessionDescription) {
     try {
-      await peerConnection.setRemoteDescription(serverSessionDescription);
-      const clientSessionDescription = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(clientSessionDescription);
-      ws.send(JSON.stringify({ type: "clientSessionDescription", clientSessionDescription }));
+      if (serverSessionDescription.type === "offer" && peerConnection.signalingState !== "stable") {
+        await Promise.all([
+          peerConnection.setLocalDescription({ type: "rollback" }),
+          peerConnection.setRemoteDescription(serverSessionDescription)
+        ]);
+      } else {
+        await peerConnection.setRemoteDescription(serverSessionDescription);
+      }
+
+      if (serverSessionDescription.type == "offer") {
+        const clientSessionDescription = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(clientSessionDescription);
+        ws.send(JSON.stringify({ type: "clientSessionDescription", clientSessionDescription }));
+      }
     } catch (error) {
       console.error(`Error negotiating PeerConnection ${error}`);
     }
@@ -48,7 +72,7 @@ export default function connect() {
         handleIceCandidate(message.candidate);
         break;
       case "serverSessionDescription":
-        handleServerSessionDescription(message.serverSessionDescription)
+        handleServerSessionDescription(message.serverSessionDescription);
         break;
       default:
         console.log(`Received unknown message type: "${message.type}"`);
@@ -60,4 +84,16 @@ export default function connect() {
     console.log("WebSocket closed.")
     peerConnection.close();
   });
+
+  return {
+    addTrack: (track, ...streams) => {
+      return peerConnection.addTrack(track, ...streams);
+    },
+    removeTrack: (trackRtpSender) => {
+      peerConnection.removeTrack(trackRtpSender);
+    },
+    close: () => {
+      ws.close();
+    }
+  };
 }
